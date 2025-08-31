@@ -1,0 +1,66 @@
+# docker-compose.yml (crear en la raíz del proyecto)
+version: '3.8'
+
+services:
+  # Base de datos PostgreSQL
+  postgres:
+    image: postgres:15-alpine
+    container_name: asisya_postgres
+    environment:
+      POSTGRES_DB: AsisyaProductsDb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - asisya_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Admin de base de datos (opcional, pero útil)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: asisya_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@asisya.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    networks:
+      - asisya_network
+
+  # Tu API (la configuraremos después)
+  api:
+    build:
+      context: .
+      dockerfile: src/Api/Dockerfile
+    container_name: asisya_api
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=AsisyaProductsDb;Username=postgres;Password=postgres123
+    ports:
+      - "5000:80"
+      - "5001:443"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - asisya_network
+    profiles:
+      - with-api  # Solo se ejecuta si especificas el profile
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  asisya_network:
+    driver: bridge
