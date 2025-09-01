@@ -75,7 +75,7 @@ dotnet run
 
 ```bash
 # Ejecutar toda la aplicación
-docker-compose up --build
+docker-compose --profile with-api up --build -d
 
 # Acceder a:
 # - API: http://localhost:5000
