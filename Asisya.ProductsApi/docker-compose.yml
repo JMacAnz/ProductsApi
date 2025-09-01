@@ -41,14 +41,13 @@ services:
   api:
     build:
       context: .
-      dockerfile: src/Api/Dockerfile
+      dockerfile: Dockerfile
     container_name: asisya_api
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=AsisyaProductsDb;Username=postgres;Password=postgres123
     ports:
-      - "5000:80"
-      - "5001:443"
+      - "5000:8080"
     depends_on:
       postgres:
         condition: service_healthy

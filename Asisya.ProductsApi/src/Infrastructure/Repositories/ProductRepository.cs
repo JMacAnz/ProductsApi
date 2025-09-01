@@ -79,8 +79,8 @@ namespace Infrastructure.Repositories
 
         public async Task BulkInsertAsync(IEnumerable<Product> products)
         {
+            // Para inserción masiva eficiente
             await _dbSet.AddRangeAsync(products);
-            await SaveChangesAsync(); // Usa el método del BaseRepository
         }
     }
 }

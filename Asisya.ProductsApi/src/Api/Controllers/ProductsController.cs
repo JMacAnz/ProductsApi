@@ -1,33 +1,45 @@
 ﻿using Api.Models;
+using Application.DTOs;
 using Application.Services;
-using Domain.Entities;
-using Domain.Repositories;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
+using System.Collections.Concurrent;
+using System.Security.Claims;
 
 namespace Api.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    [Authorize] // Requiere autenticación JWT
-    public class ProductsController : ControllerBase
+    [Authorize]
+    [EnableRateLimiting("GlobalPolicy")]
+    public class ProductController : ControllerBase
     {
-        private readonly IProductRepository _productRepository;
-        private readonly ICategoryRepository _categoryRepository;
-        private readonly ILogger<ProductsController> _logger;
+        private readonly IProductService _productService;
+        private readonly ICategoryService _categoryService;
+        private readonly IMemoryCache _cache;
+        private readonly ILogger<ProductController> _logger;
 
-        public ProductsController(
-            IProductRepository productRepository,
-            ICategoryRepository categoryRepository,
-            ILogger<ProductsController> logger)
+        // Contador de versión global para invalidar la caché de listas paginadas.
+        private static int _productsCacheVersion = 0;
+        private static readonly object _cacheLock = new();
+
+        public ProductController(
+            IProductService productService,
+            ICategoryService categoryService,
+            IMemoryCache cache,
+            ILogger<ProductController> logger)
         {
-            _productRepository = productRepository;
-            _categoryRepository = categoryRepository;
+            _productService = productService;
+            _categoryService = categoryService;
+            _cache = cache;
             _logger = logger;
         }
 
         [HttpGet]
-        public async Task<ActionResult<ApiResponse<PagedResponse<Product>>>> GetProducts(
+        public async Task<ActionResult<ApiResponse<PagedResponse<ProductDto>>>> GetProducts(
             [FromQuery] int pageNumber = 1,
             [FromQuery] int pageSize = 10,
             [FromQuery] string? search = null,
@@ -38,31 +50,59 @@ namespace Api.Controllers
         {
             try
             {
-                if (pageNumber < 1) pageNumber = 1;
-                if (pageSize < 1 || pageSize > 100) pageSize = 10;
+                // La versión global en la clave de caché asegura que una actualización invalide todas las listas.
+                var cacheKey = $"products_v{_productsCacheVersion}_{pageNumber}_{pageSize}_{search}_{categoryId}_{minPrice}_{maxPrice}_{isActive}";
 
-                var (items, totalCount) = await _productRepository.GetProductsWithFiltersAsync(
-                    pageNumber, pageSize, search, categoryId, minPrice, maxPrice, isActive);
-
-                var pagedResponse = new PagedResponse<Product>
+                if (_cache.TryGetValue(cacheKey, out PagedResponse<ProductDto>? cachedResponse))
                 {
-                    Items = items,
-                    TotalCount = totalCount,
+                    return Ok(new ApiResponse<PagedResponse<ProductDto>>
+                    {
+                        Success = true,
+                        Message = "Productos obtenidos desde caché",
+                        Data = cachedResponse
+                    });
+                }
+
+                var filters = new ProductFiltersDto
+                {
                     PageNumber = pageNumber,
-                    PageSize = pageSize
+                    PageSize = pageSize,
+                    SearchTerm = search,
+                    CategoryId = categoryId,
+                    MinPrice = minPrice,
+                    MaxPrice = maxPrice,
+                    IsActive = isActive
                 };
 
-                return Ok(new ApiResponse<PagedResponse<Product>>
+                var result = await _productService.GetProductsAsync(filters);
+
+                var response = new PagedResponse<ProductDto>
+                {
+                    Items = result.Items,
+                    TotalCount = result.TotalCount,
+                    PageNumber = result.PageNumber,
+                    PageSize = result.PageSize
+                };
+
+                var cacheOptions = new MemoryCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30),
+                    Size = result.TotalCount
+                };
+
+                _cache.Set(cacheKey, response, cacheOptions);
+
+                return Ok(new ApiResponse<PagedResponse<ProductDto>>
                 {
                     Success = true,
                     Message = "Productos obtenidos exitosamente",
-                    Data = pagedResponse
+                    Data = response
                 });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error al obtener productos");
-                return StatusCode(500, new ApiResponse<PagedResponse<Product>>
+                return StatusCode(500, new ApiResponse<PagedResponse<ProductDto>>
                 {
                     Success = false,
                     Message = "Error interno del servidor"
@@ -71,21 +111,43 @@ namespace Api.Controllers
         }
 
         [HttpGet("{id}")]
-        public async Task<ActionResult<ApiResponse<Product>>> GetProduct(int id)
+        public async Task<ActionResult<ApiResponse<ProductDto>>> GetProduct(int id)
         {
             try
             {
-                var product = await _productRepository.GetByIdWithCategoryAsync(id);
+                // Clave de caché simple basada solo en el ID.
+                var cacheKey = $"product_{id}";
+
+                if (_cache.TryGetValue(cacheKey, out ProductDto? cachedProduct))
+                {
+                    return Ok(new ApiResponse<ProductDto>
+                    {
+                        Success = true,
+                        Message = "Producto obtenido desde caché",
+                        Data = cachedProduct
+                    });
+                }
+
+                var product = await _productService.GetProductByIdAsync(id);
                 if (product == null)
                 {
-                    return NotFound(new ApiResponse<Product>
+                    return NotFound(new ApiResponse<ProductDto>
                     {
                         Success = false,
                         Message = "Producto no encontrado"
                     });
                 }
 
-                return Ok(new ApiResponse<Product>
+                var cacheOptions = new MemoryCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5),
+                    Size = 1
+                };
+
+                // Cachear producto por 5 minutos
+                _cache.Set(cacheKey, product, cacheOptions);
+
+                return Ok(new ApiResponse<ProductDto>
                 {
                     Success = true,
                     Message = "Producto obtenido exitosamente",
@@ -95,7 +157,7 @@ namespace Api.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error al obtener producto {Id}", id);
-                return StatusCode(500, new ApiResponse<Product>
+                return StatusCode(500, new ApiResponse<ProductDto>
                 {
                     Success = false,
                     Message = "Error interno del servidor"
@@ -104,36 +166,22 @@ namespace Api.Controllers
         }
 
         [HttpPost]
-        public async Task<ActionResult<ApiResponse<Product>>> CreateProduct([FromBody] CreateProductRequest request)
+        [EnableRateLimiting("CreateProductPolicy")]
+        public async Task<ActionResult<ApiResponse<ProductDto>>> CreateProduct([FromBody] CreateProductRequest request)
         {
             try
             {
-                // Verificar que la categoría existe
-                var category = await _categoryRepository.GetByIdAsync(request.CategoryId);
+                var category = await GetCategoryFromCacheAsync(request.CategoryId);
                 if (category == null)
                 {
-                    return BadRequest(new ApiResponse<Product>
+                    return BadRequest(new ApiResponse<ProductDto>
                     {
                         Success = false,
                         Message = "La categoría especificada no existe"
                     });
                 }
 
-                // Verificar SKU único si se proporciona
-                if (!string.IsNullOrWhiteSpace(request.SKU))
-                {
-                    var skuExists = await _productRepository.ExistsBySKUAsync(request.SKU);
-                    if (skuExists)
-                    {
-                        return BadRequest(new ApiResponse<Product>
-                        {
-                            Success = false,
-                            Message = "Ya existe un producto con ese SKU"
-                        });
-                    }
-                }
-
-                var product = new Product
+                var productDto = new CreateProductDto
                 {
                     Name = request.Name,
                     Description = request.Description,
@@ -144,97 +192,36 @@ namespace Api.Controllers
                     IsActive = request.IsActive
                 };
 
-                await _productRepository.AddAsync(product);
-                await _productRepository.SaveChangesAsync();
+                var result = await _productService.CreateProductAsync(productDto);
 
-                // Recargar con categoría para la respuesta
-                var createdProduct = await _productRepository.GetByIdWithCategoryAsync(product.Id);
+                // Invalidar la caché de listas, ya que se ha añadido un nuevo producto.
+                InvalidateProductCaches();
+
+                _logger.LogDebug("Producto {ProductId} creado por usuario {UserEmail}",
+                    result.Id, User.FindFirst(ClaimTypes.Email)?.Value);
 
                 return CreatedAtAction(
                     nameof(GetProduct),
-                    new { id = product.Id },
-                    new ApiResponse<Product>
+                    new { id = result.Id },
+                    new ApiResponse<ProductDto>
                     {
                         Success = true,
                         Message = "Producto creado exitosamente",
-                        Data = createdProduct
+                        Data = result
                     });
             }
-            catch (Exception ex)
+            catch (ArgumentException ex)
             {
-                _logger.LogError(ex, "Error al crear producto");
-                return StatusCode(500, new ApiResponse<Product>
+                return BadRequest(new ApiResponse<ProductDto>
                 {
                     Success = false,
-                    Message = "Error interno del servidor"
-                });
-            }
-        }
-
-        [HttpPost("bulk")]
-        public async Task<ActionResult<ApiResponse<BulkCreateResponse>>> CreateBulkProducts([FromBody] BulkCreateProductsRequest request)
-        {
-            try
-            {
-                if (request.Count <= 0 || request.Count > 100000)
-                {
-                    return BadRequest(new ApiResponse<BulkCreateResponse>
-                    {
-                        Success = false,
-                        Message = "La cantidad debe estar entre 1 y 100,000"
-                    });
-                }
-
-                // Verificar que la categoría existe
-                var category = await _categoryRepository.GetByIdAsync(request.CategoryId);
-                if (category == null)
-                {
-                    return BadRequest(new ApiResponse<BulkCreateResponse>
-                    {
-                        Success = false,
-                        Message = "La categoría especificada no existe"
-                    });
-                }
-
-                var products = new List<Product>();
-                var random = new Random();
-
-                for (int i = 0; i < request.Count; i++)
-                {
-                    var product = new Product
-                    {
-                        Name = $"{request.BaseProductName ?? "Producto"} {i + 1:D6}",
-                        Description = $"Descripción del producto generado automáticamente #{i + 1}",
-                        Price = Math.Round((decimal)(random.NextDouble() * (request.MaxPrice - request.MinPrice) + request.MinPrice), 2),
-                        Stock = random.Next(0, 1000),
-                        SKU = $"SKU-{category.Name}-{DateTime.UtcNow.Ticks}-{i:D6}",
-                        CategoryId = request.CategoryId,
-                        IsActive = true
-                    };
-                    products.Add(product);
-                }
-
-                await _productRepository.BulkInsertAsync(products);
-                await _productRepository.SaveChangesAsync();
-
-                _logger.LogInformation("Creados {Count} productos masivamente para categoría {CategoryId}",
-                    request.Count, request.CategoryId);
-
-                return Ok(new ApiResponse<BulkCreateResponse>
-                {
-                    Success = true,
-                    Message = $"Se crearon {request.Count} productos exitosamente",
-                    Data = new BulkCreateResponse
-                    {
-                        CreatedCount = request.Count,
-                        CategoryName = category.Name
-                    }
+                    Message = ex.Message
                 });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error al crear productos masivamente");
-                return StatusCode(500, new ApiResponse<BulkCreateResponse>
+                _logger.LogError(ex, "Error al crear producto: {Message}", ex.Message);
+                return StatusCode(500, new ApiResponse<ProductDto>
                 {
                     Success = false,
                     Message = "Error interno del servidor"
@@ -243,59 +230,54 @@ namespace Api.Controllers
         }
 
         [HttpPut("{id}")]
-        public async Task<ActionResult<ApiResponse<Product>>> UpdateProduct(int id, [FromBody] UpdateProductRequest request)
+        public async Task<ActionResult<ApiResponse<ProductDto>>> UpdateProduct(int id, [FromBody] UpdateProductRequest request)
         {
             try
             {
-                var product = await _productRepository.GetByIdAsync(id);
-                if (product == null)
+                var productDto = new UpdateProductDto
                 {
-                    return NotFound(new ApiResponse<Product>
-                    {
-                        Success = false,
-                        Message = "Producto no encontrado"
-                    });
-                }
+                    Id = id,
+                    Name = request.Name,
+                    Description = request.Description,
+                    Price = request.Price,
+                    Stock = request.Stock,
+                    CategoryId = request.CategoryId,
+                    IsActive = request.IsActive
+                };
 
-                // Verificar que la categoría existe si se cambió
-                if (request.CategoryId != product.CategoryId)
-                {
-                    var category = await _categoryRepository.GetByIdAsync(request.CategoryId);
-                    if (category == null)
-                    {
-                        return BadRequest(new ApiResponse<Product>
-                        {
-                            Success = false,
-                            Message = "La categoría especificada no existe"
-                        });
-                    }
-                }
+                var result = await _productService.UpdateProductAsync(productDto);
 
-                // Actualizar propiedades
-                product.Name = request.Name;
-                product.Description = request.Description;
-                product.Price = request.Price;
-                product.Stock = request.Stock;
-                product.CategoryId = request.CategoryId;
-                product.IsActive = request.IsActive;
-                product.UpdatedAt = DateTime.UtcNow;
+                // Invalidar la caché del producto específico y las listas.
+                _cache.Remove($"product_{id}");
+                InvalidateProductCaches();
 
-                await _productRepository.UpdateAsync(product);
-                await _productRepository.SaveChangesAsync();
-
-                var updatedProduct = await _productRepository.GetByIdWithCategoryAsync(product.Id);
-
-                return Ok(new ApiResponse<Product>
+                return Ok(new ApiResponse<ProductDto>
                 {
                     Success = true,
                     Message = "Producto actualizado exitosamente",
-                    Data = updatedProduct
+                    Data = result
+                });
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(new ApiResponse<ProductDto>
+                {
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                return Conflict(new ApiResponse<ProductDto>
+                {
+                    Success = false,
+                    Message = "El producto fue modificado por otro usuario. Vuelve a cargar los datos antes de intentar de nuevo."
                 });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error al actualizar producto {Id}", id);
-                return StatusCode(500, new ApiResponse<Product>
+                return StatusCode(500, new ApiResponse<ProductDto>
                 {
                     Success = false,
                     Message = "Error interno del servidor"
@@ -308,8 +290,8 @@ namespace Api.Controllers
         {
             try
             {
-                var product = await _productRepository.GetByIdAsync(id);
-                if (product == null)
+                var deleted = await _productService.DeleteProductAsync(id);
+                if (!deleted)
                 {
                     return NotFound(new ApiResponse<object>
                     {
@@ -318,10 +300,9 @@ namespace Api.Controllers
                     });
                 }
 
-                await _productRepository.DeleteAsync(product);
-                await _productRepository.SaveChangesAsync();
-
-                _logger.LogInformation("Producto {Id} eliminado exitosamente", id);
+                // Invalidar la caché del producto específico y las listas.
+                _cache.Remove($"product_{id}");
+                InvalidateProductCaches();
 
                 return Ok(new ApiResponse<object>
                 {
@@ -337,6 +318,35 @@ namespace Api.Controllers
                     Success = false,
                     Message = "Error interno del servidor"
                 });
+            }
+        }
+
+        private async Task<CategoryDto?> GetCategoryFromCacheAsync(int categoryId)
+        {
+            var cacheKey = $"category_{categoryId}";
+
+            if (!_cache.TryGetValue(cacheKey, out CategoryDto? category))
+            {
+                category = await _categoryService.GetCategoryByIdAsync(categoryId);
+                if (category != null)
+                {
+                    var cacheOptions = new MemoryCacheEntryOptions
+                    {
+                        AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10),
+                        Size = 1
+                    };
+                    _cache.Set(cacheKey, category, cacheOptions);
+                }
+            }
+            return category;
+        }
+
+        private void InvalidateProductCaches()
+        {
+            lock (_cacheLock)
+            {
+                _productsCacheVersion++;
+                _logger.LogDebug("♻️ Cache de productos invalidada, nueva versión: {Version}", _productsCacheVersion);
             }
         }
     }

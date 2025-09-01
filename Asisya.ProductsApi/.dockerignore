@@ -1,12 +1,61 @@
+# .dockerignore (crear en la raíz del proyecto)
+
+# Archivos de desarrollo
 **/.dockerignore
 **/.env
 **/.git
 **/.gitignore
 **/.vs
 **/.vscode
-**/*.*proj.user
+**/.idea
+**/*.*.proj.user
+**/*.dbmdl
+**/*.jfm
+
+# Directorios de build
 **/bin
 **/obj
 **/out
+**/publish
+
+# Archivos de pruebas y coverage
+**/TestResults
+**/.coverage
+**/coverage.*.xml
+**/coverage.*.json
+
+# Archivos Docker
 Dockerfile*
+docker-compose*.yml
+
+# Documentación
 README.md
+*.md
+
+# Scripts de desarrollo
+*.ps1
+*.sh
+
+# Archivos de configuración de CI/CD
+.github/
+.gitlab-ci.yml
+
+# Archivos temporales
+**/.tmp
+**/temp
+**/.cache
+
+# Archivos de logs
+**/logs
+**/*.log
+
+# Node modules (si tienes frontend)
+**/node_modules
+
+# OS específicos
+.DS_Store
+Thumbs.db
+
+# Archivos de backup
+**/*.bak
+**/*.backup
