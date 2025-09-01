@@ -1,0 +1,54 @@
+#Reiniciar el contenedor
+docker-compose down
+#Elimina el contenedor o reinicia la base de datos limpia:
+docker-compose up -d
+docker volume prune
+docker-compose up -d
+
+# Iniciar PostgreSQL y PgAdmin
+docker-compose up postgres pgadmin -d
+
+# Navegar al proyecto API
+cd src/Api
+
+# Crear la primera migración
+dotnet ef migrations add InitialCreate --project ../Infrastructure --startup-project .
+
+# Aplicar las migraciones (crear las tablas)
+dotnet ef database update
+o Actualizar
+dotnet ef database update --project ..\Infrastructure --startup-project .
+
+
+# Si hay errores, verificar la conexión:
+dotnet ef database update --verbose
+```
+
+## 4. Ejecutar la aplicación
+
+```cmd
+# Desde la raíz del proyecto
+cd src/Api
+
+
+en caso de errore
+#Listar volúmenes y eliminar el de PostgreSQL
+docker volume ls
+docker volume rm asisya_postgres_data (cambiar por name de los de la lista)
+docker-compose up -d
+dotnet ef migrations add InitialCreate --project ../Infrastructure --startup-project .
+dotnet ef database update --project ../Infrastructure --startup-project .
+
+
+# Levantar todos los servicios bajo el profile "with-api"
+docker-compose --profile with-api up --build -d
+
+# Ver logs de todos los servicios en tiempo real
+docker-compose logs -f
+
+# Detener todos los servicios del profile "with-api"
+docker-compose --profile with-api down
+
+Si quieres reiniciar y limpiar volúmenes para un “reset” completo de la base de datos:
+docker-compose --profile with-api down -v
+
