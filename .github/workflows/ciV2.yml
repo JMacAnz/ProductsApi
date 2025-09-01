@@ -1,5 +1,6 @@
-# .github/workflows/ci.yml
-name: ✅ CI Build & Test
+# .github/workflows/ci-build-test.yml
+
+name: "✅ CI Build & Test"
 
 on:
   push:
@@ -9,7 +10,7 @@ on:
 
 jobs:
   build-and-test:
-    name: 🏗️ Build and Test
+    name: "🏗️ Build and Test"
     runs-on: ubuntu-latest
 
     services:
@@ -28,15 +29,15 @@ jobs:
           - 5432:5432
 
     steps:
-    - name: 📥 Checkout repository
+    - name: "📥 Checkout repository"
       uses: actions/checkout@v4
 
-    - name: 🔧 Setup .NET 9.0
+    - name: "🔧 Setup .NET 9.0"
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: '9.0.x'
 
-    - name: 📦 Cache NuGet packages
+    - name: "📦 Cache NuGet packages"
       uses: actions/cache@v3
       with:
         path: ~/.nuget/packages
@@ -44,59 +45,5 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-nuget-
 
-    - name: 🔄 Restore dependencies
-      run: dotnet restore Asisya.ProductsApi/Asisya.ProductsApi.sln
-
-    - name: 🏗️ Build solution
-      run: dotnet build Asisya.ProductsApi/Asisya.ProductsApi.sln --configuration Release --no-restore
-
-    - name: ⏳ Wait for Postgres
-      run: |
-        until pg_isready -h localhost -p 5432 -U postgres; do
-          echo "Esperando a que Postgres esté listo..."
-          sleep 5
-        done
-
-    - name: 🧪 Run unit tests
-      run: |
-        dotnet test Asisya.ProductsApi/tests/Application.Tests \
-          --configuration Release \
-          --no-build \
-          --verbosity normal \
-          --logger trx \
-          --results-directory ./test-results
-
-    - name: 🧪 Run integration tests
-      run: |
-        dotnet test Asisya.ProductsApi/tests/Api.IntegrationTests \
-          --configuration Release \
-          --no-build \
-          --verbosity normal \
-          --logger trx \
-          --results-directory ./test-results
-      env:
-        ConnectionStrings__DefaultConnection: "Host=localhost;Port=5432;Database=AsisyaTestDb;Username=postgres;Password=postgres123"
-
-    - name: 📊 Publish test results
-      uses: dorny/test-reporter@v1
-      if: always()
-      with:
-        name: 'Test Results'
-        path: './test-results/*.trx'
-        reporter: 'dotnet-trx'
-
-    - name: 🐳 Build Docker image
-      run: |
-        docker build -t asisya-products-api:latest -t asisya-products-api:${{ github.sha }} Asisya.ProductsApi/
-
-    - name: ✅ Success notification
-      if: success()
-      run: |
-        echo "🎉 Build successful!"
-        echo "✅ All tests passed. The build is ready for deployment."
-
-    - name: ❌ Failure notification
-      if: failure()
-      run: |
-        echo "❌ Build failed!"
-        echo "🔍 Check the logs above for details"
+    - name: "🔄 Restore dependencies"
+      run: dotnet restore Asisya.ProductsApi/Asisya.Prod
