@@ -46,14 +46,17 @@ jobs:
           ${{ runner.os }}-nuget-
 
     - name: 🔄 Restore dependencies
-      run: dotnet restore Asisya.ProductsApi.sln
+      # Se añade la ruta de la solución para que el comando funcione correctamente.
+      run: dotnet restore Asisya.ProductsApi/Asisya.ProductsApi.sln
 
     - name: 🏗️ Build solution
-      run: dotnet build --configuration Release --no-restore
+      # Se añade la ruta de la solución.
+      run: dotnet build Asisya.ProductsApi/Asisya.ProductsApi.sln --configuration Release --no-restore
 
     - name: 🧪 Run unit tests
+      # Se actualiza la ruta del proyecto de pruebas.
       run: |
-        dotnet test tests/Application.Tests \
+        dotnet test Asisya.ProductsApi/tests/Application.Tests \
           --configuration Release \
           --no-build \
           --verbosity normal \
@@ -61,8 +64,9 @@ jobs:
           --results-directory ./test-results
 
     - name: 🧪 Run integration tests
+      # Se actualiza la ruta del proyecto de pruebas.
       run: |
-        dotnet test tests/Api.IntegrationTests \
+        dotnet test Asisya.ProductsApi/tests/Api.IntegrationTests \
           --configuration Release \
           --no-build \
           --verbosity normal \
@@ -80,16 +84,16 @@ jobs:
         reporter: 'dotnet-trx'
 
     - name: 🐳 Build Docker image (no push)
+      # Se cambia el contexto de la construcción a la carpeta que contiene el Dockerfile.
       run: |
-        docker build -t asisya-products-api:${{ github.sha }} .
-        docker build -t asisya-products-api:latest .
+        docker build -t asisya-products-api:${{ github.sha }} Asisya.ProductsApi/
+        docker build -t asisya-products-api:latest Asisya.ProductsApi/
 
     - name: ✅ Success notification
       if: success()
       run: |
         echo "🎉 Build successful!"
-        echo "✅ All tests passed"
-        echo "🐳 Docker image built successfully"
+        echo "✅ All tests passed. The build is ready for deployment."
 
     - name: ❌ Failure notification
       if: failure()
