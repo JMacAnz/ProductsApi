@@ -1,6 +1,9 @@
 # .github/workflows/ci.yml
 name: ✅ CI Build & Test
-
+permissions:
+  contents: read
+  checks: write
+  
 on:
   push:
     branches: [ main, develop ]
